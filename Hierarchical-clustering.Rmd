@@ -1,0 +1,254 @@
+---
+title: "Exploring-hierarchical-clustering"
+author: "Princewill"
+date: "2025-11-05"
+output:
+  pdf_document:
+    latex_engine: xelatex
+  html_document: default
+  word_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+**Introduction**
+The purpose of this project was to explore hierarchical clustering techniques on a synthetic dataset with known group labels. The analysis evaluates whether meaningful clusters exist, identifies the optimal number of clusters, and compares five linkage methods—Single, Complete, Average, Ward.D, and Ward.D2—using internal and external validation measures.
+
+
+```{r}
+library(tidyverse)
+library(cluster)        # silhouette
+library(factoextra)     # viz: fviz_*, get_clust_tendency
+library(clustertend)    # Hopkins, VAT
+library(dendextend)     # dendrogram comparison
+        
+
+set.seed(42)
+
+ # Data: synthetic with ground truth (≥ 3 centers, ≥ 3 features)
+n_per_group <- 25
+centers <- matrix(c(0,0,0,
+                    6,5,0,
+                    -5, 2, 3,
+                    3,-4, 6), ncol = 3, byrow = TRUE)  # 4 groups, 3 features
+sd_within <- 1.4
+
+mk_blob <- function(mu, n, sd) sweep(matrix(rnorm(n*length(mu), 0, sd), ncol=length(mu)), 2, mu, "+")
+X_list <- lapply(1:nrow(centers), function(i) mk_blob(centers[i,], n_per_group, sd_within))
+X <- do.call(rbind, X_list)
+y <- factor(rep(paste0("G",1:nrow(centers)), each = n_per_group))
+colnames(X) <- c("student1","student2","student3")
+df <- as_tibble(X) %>% mutate(label = y)
+head(df)
+str(df)
+df
+```
+*Data Preparation*
+A synthetic dataset containing 100 observations was generated using four predefined centers and three numeric features (student1, student2, and student3). Each group represented a unique cluster label (G1–G4).
+
+
+```{r}
+# Standardize only numeric feature columns, exclude the label
+Xscaled <- scale(df[, !names(df) %in% "label"])
+
+head(Xscaled)
+
+```
+To ensure comparability among variables, all numeric columns were standardized before distance calculation.
+
+```{r}
+# Hopkins correctly
+
+set.seed(42)
+
+tendency <- get_clust_tendency(Xscaled, n = 75, graph = TRUE)
+tendency$hopkins_stat
+```
+The Hopkins statistic (0.751) was computed to assess clustering tendency. Although slightly high, the data exhibited moderate potential for cluster formation. A visual assessment using the VAT map confirmed partial structure, justifying further hierarchical clustering.
+
+```{r}
+#Compute Distance Matrix
+D <- dist(Xscaled, method = "euclidean")
+
+#Apply All 5 Linkage Methods
+
+hc_single   <- hclust(D, method = "single")
+
+hc_complete <- hclust(D, method = "complete")
+
+hc_average  <- hclust(D, method = "average")
+
+hc_wardD    <- hclust(D, method = "ward.D")
+
+hc_wardD2   <- hclust(D, method = "ward.D2")
+```
+
+*Five linkage techniques were applied to the Euclidean distance matrix:*
+•	Single linkage (minimum distance)
+•	Complete linkage (maximum distance)
+•	Average linkage (mean distance)
+•	Ward.D and Ward.D2 (variance-minimizing approaches)
+Each method was visualized using dendrograms and cluster plots to observe differences in grouping patterns. Ward’s methods produced the most compact and interpretable clusters.
+
+```{r}
+#Plot Dendrograms
+fviz_dend(hc_single,   main = "Single Linkage")
+fviz_dend(hc_complete, main = "Complete Linkage")
+fviz_dend(hc_average,  main = "Average Linkage")
+fviz_dend(hc_wardD,    main = "Ward.D Linkage")
+fviz_dend(hc_wardD2,   main = "Ward.D2 Linkage")
+```
+
+
+
+```{r}
+#Number of Clusters
+set.seed(42)
+
+# Compute Gap Statistic
+gap_stat <- clusGap(
+  Xscaled,                  # standardized numeric data
+  FUN = hcut,               # hierarchical clustering wrapper for gap statistic
+  K.max = 10,               # test from 1 to 10 clusters
+  B = 100                   # number of bootstraps
+)
+
+# Print results
+print(gap_stat)
+
+# Visualize the Gap Statistic
+fviz_gap_stat(gap_stat) + ggtitle("Gap Statistic for Optimal Number of Clusters")
+
+```
+*The Gap Statistic method (clusGap) identified 4 clusters as optimal. This agreed with the true number of groups in the simulated data and was confirmed by silhouette inspection.*
+
+```{r}
+#Cut Dendrograms & Compare to Ground Truth
+set.seed(42)
+k <- 4 # number of clusters to cut into
+clusters_single   <- cutree(hc_single,   k = k)
+clusters_complete <- cutree(hc_complete, k = k)
+clusters_average  <- cutree(hc_average,  k = k)
+clusters_wardD    <- cutree(hc_wardD,    k = k)
+clusters_wardD2   <- cutree(hc_wardD2,   k = k)
+
+table(clusters_single)
+table(clusters_complete)
+table(clusters_average)
+table(clusters_wardD)
+table(clusters_wardD2) 
+```
+
+```{r}
+#Silhouette Plots for All 5 Hierarchical Methods
+
+# List of cluster assignments
+methods <- list(
+  Single   = clusters_single,
+  Complete = clusters_complete,
+  Average  = clusters_average,
+  WardD    = clusters_wardD,
+  WardD2   = clusters_wardD2
+)
+
+# Loop and generate silhouette graph for each
+for (m in names(methods)) {
+  sil <- silhouette(methods[[m]], D)
+  plot(sil,
+       main = paste("Silhouette Plot -", m, "Linkage"),
+       xlab = "Cluster",
+       ylab = "Silhouette Width",
+       col = 1:max(methods[[m]]),
+       border = NA)
+}
+
+
+```
+
+```{r}
+
+#Visualize Clusters from Different Linkage Methods
+fviz_cluster(list(data = Xscaled, cluster = clusters_single),   main = "Clusters from Single Linkage")
+fviz_cluster(list(data = Xscaled, cluster = clusters_complete), main = "Clusters from Complete Linkage")
+fviz_cluster(list(data = Xscaled, cluster = clusters_average),  main = "Clusters from Average Linkage")
+fviz_cluster(list(data = Xscaled, cluster = clusters_wardD),    main = "Clusters from Ward.D Linkage")
+fviz_cluster(list(data = Xscaled, cluster = clusters_wardD2),   main = "Clusters from Ward.D2 Linkage")
+
+```
+*Internal Validation*
+*Silhouette and Dunn indices were calculated to assess cohesion vs. separation:*
+```{r}
+#internal validation Using silhouette and Dunn Index
+#Silhouette for each method
+library(cluster)
+
+sil_single   <- mean(silhouette(clusters_single,   D)[, 3])
+sil_complete <- mean(silhouette(clusters_complete, D)[, 3])
+sil_average  <- mean(silhouette(clusters_average,  D)[, 3])
+sil_wardD    <- mean(silhouette(clusters_wardD,    D)[, 3])
+sil_wardD2   <- mean(silhouette(clusters_wardD2,   D)[, 3])
+
+#Dunn Index for each method
+library(clusterCrit)
+
+# Convert scaled data to matrix
+X_mat <- as.matrix(Xscaled)
+
+# Compute Dunn index
+dunn_single   <- intCriteria(X_mat, as.integer(clusters_single),   "Dunn")$dunn
+dunn_complete <- intCriteria(X_mat, as.integer(clusters_complete), "Dunn")$dunn
+dunn_average  <- intCriteria(X_mat, as.integer(clusters_average),  "Dunn")$dunn
+dunn_wardD    <- intCriteria(X_mat, as.integer(clusters_wardD),    "Dunn")$dunn
+dunn_wardD2   <- intCriteria(X_mat, as.integer(clusters_wardD2),   "Dunn")$dunn
+```
+*External Validation*
+```{r}
+#External validation — using df$label
+library(mclust)
+#ARI (Adjusted Rand Index – Compares to True Labels)
+ari_single   <- adjustedRandIndex(df$label, clusters_single)
+ari_complete <- adjustedRandIndex(df$label, clusters_complete)
+ari_average  <- adjustedRandIndex(df$label, clusters_average)
+ari_wardD    <- adjustedRandIndex(df$label, clusters_wardD)
+ari_wardD2   <- adjustedRandIndex(df$label, clusters_wardD2)
+```
+*Summary of Results*
+```{r}
+#Summarize Results
+results <- data.frame(
+  Method     = c("Single", "Complete", "Average", "Ward.D", "Ward.D2"),
+  Silhouette = round(c(sil_single, sil_complete, sil_average, sil_wardD, sil_wardD2), 3),
+  Dunn_Index = round(c(dunn_single, dunn_complete, dunn_average, dunn_wardD, dunn_wardD2), 3),
+  ARI        = round(c(ari_single, ari_complete, ari_average, ari_wardD, ari_wardD2), 3)
+)
+
+results
+
+```
+**Cluster performance was evaluated using three criteria:**
+	Silhouette Index: Highest for Average and Ward.D methods (≈0.55), indicating well-separated clusters.
+	Dunn Index: Consistent with silhouette trends; higher values show tighter and well-separated groups.
+	ARI (Adjusted Rand Index): Ward.D and Average linkages achieved the strongest agreement (≈0.97) with the ground truth.
+
+*Results Interpretation:*
+The Ward.D and Average linkage methods provided the most reliable and stable partitions, forming clusters similar to the original groups.
+Single linkage performed poorly due to chaining effects, while Complete linkage performed reasonably but slightly less efficiently than Ward.D2.
+
+*Visualization Summary*
+•	Dendrograms clearly showed separation between four clusters.
+•	Gap statistic plot confirmed the “elbow” at k = 4.
+•	Silhouette plots validated that clusters produced by Ward.D and Average were compact and well-defined.
+•	Cluster scatterplots (from fviz_cluster) illustrated clear group boundaries for Ward methods.
+
+
+*Conclusion:*
+Hierarchical clustering effectively identified the four natural groups in the dataset.
+Ward.D and Average linkage methods were superior, offering the highest internal cohesion and external alignment with true labels.
+The combination of silhouette analysis, Dunn index, and Adjusted Rand Index provided a comprehensive validation framework.
+
+
+
+
+
